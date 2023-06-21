@@ -1,0 +1,931 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use PDF;
+use Dompdf\Dompdf;
+use Dompdf\Options;
+use Illuminate\Support\Facades\Storage;
+use App\Kardex as Kardex;
+use App\Materias as Materias;
+use App\Alumnos as Alumnos;
+//use Mpdf\Mpdf;
+use Carbon\Carbon;
+use App\CalificacionesTmp as CalificacionesTmp;
+use App\Maestros as Maestros;
+
+//use Barryvdh\DomPDF\PDF;
+
+
+class alumnosController extends Controller
+{
+		public function index()
+    {
+				$response = array(
+						'menssage' => 'success',
+						'action' => 'get all alumnos data',
+						'codigo' => 200
+				);
+				return response()->json($response, 200);
+				return 'hi desde alumnos get';
+        return Alumnos::all();
+    }
+
+    public function show(Alumnos $alumno)
+    {
+        return $alumno;
+    }
+
+    public function store(Request $request)
+    {
+        $alumno = Alumnos::create($request->all());
+
+        return response()->json($alumno, 201);
+    }
+
+    public function update(Request $request, Alumnos $alumno)
+    {
+        $alumno->update($request->all());
+
+        return response()->json($alumno, 200);
+    }
+
+    public function delete(Alumnos $alumno)
+    {
+        $alumno->delete();
+
+        return response()->json(null, 204);
+    }
+
+	//funciones para obtener kardex y boleta
+	public function getKardex(Request $request)
+    {
+		//validar token
+		//validar que venga la matricula
+		if((isset($request['matricula'])) && (!empty($request['matricula'])) && ($request['matricula'] != '')){
+			//validar que la matricula exista
+			//$data = DB::select('SELECT * FROM alumnos WHERE matricula = ? limit 1', [$request['matricula']]);
+			$alumno = Alumnos::where('matricula','=',$request['matricula'])->first();
+
+			//$data = DB::select($sql);
+			if(empty($alumno)){
+				return response()->json($response = array('menssage' => 'Matricula no encontrada.','matricula' => $request['matricula']), 202);
+			}else{
+				//obtener informacion de kardex
+				$kardex_data = Kardex::where('matricula','=',$request['matricula'])->orderBy('materia')->get();
+				if (count($kardex_data)==0) {
+					return response()->json($response = array('menssage' => 'Matricula sin datos de kardex.','matricula' => $request['matricula']), 202);
+				}
+				$html_kardex = $this->getKardexHtml($kardex_data,$alumno);
+
+
+
+				/*
+				$namefile = 'kardex_'.$alumno->matricula.'.pdf';
+			    $defaultConfig = (new \Mpdf\Config\ConfigVariables())->getDefaults();
+			    $fontDirs = $defaultConfig['fontDir'];
+			    $defaultFontConfig = (new \Mpdf\Config\FontVariables())->getDefaults();
+			    $fontData = $defaultFontConfig['fontdata'];
+			    $mpdf = new Mpdf([
+			        'fontDir' => array_merge($fontDirs, [
+			            public_path() . '/fonts',
+			        ]),
+			        'default_font' => 'arial',
+			        // "format" => "A4",
+			        "format" => [264.8,188.9],
+			    ]);
+			    $mpdf->SetDisplayMode('fullpage');
+			    $mpdf->WriteHTML($html_kardex);
+			    $mpdf->Output(public_path().'/pdf/kardex_'.$alumno->matricula.'.pdf',"F");				
+				$pdf_enconded = chunk_split(base64_encode(file_get_contents(public_path().'/pdf/kardex_'.$alumno->matricula.'.pdf')));
+				*/
+
+				$options = new Options();
+				$options->set('isRemoteEnabled', true);
+				$dompdf = new Dompdf($options);
+				$dompdf->loadHtml($html_kardex);
+				// Render the HTML as PDF
+				$dompdf->render();
+
+				// Output the generated PDF to Browser
+				$file = $dompdf->output();
+				file_put_contents(public_path().'/pdf/kardex_'.$alumno->matricula.'.pdf', $file);
+				$pdf_enconded = chunk_split(base64_encode(file_get_contents(public_path().'/pdf/kardex_'.$alumno->matricula.'.pdf')));
+				
+
+			}
+		}else{
+			return response()->json($response = array('menssage' => 'Matricula es un campo necesario.','matricula' => $request['matricula']), 202);
+		}
+		//convertir pdf a base 64
+		//$pdf_enconded = chunk_split(base64_encode(file_get_contents($this->pdfdoc)));
+		$response = array(
+			'menssage'	 	=> 'success matricula found',
+			'action' 		=> 'getKardex',
+			'name'			=> $alumno->nombre_completo,
+			'matricula' 	=> $request['matricula'],
+			'data' 			=> json_encode($alumno),
+			'kardexURL'		=> url('/pdf/kardex_'.$alumno->matricula.'.pdf'),
+			'download'=> url('/kardex/download/'.$alumno->matricula),
+			//'kardexBase64'	=> $pdf_enconded,
+			'codigo' 		=> 200
+		);
+		return response()->json($response, 200);
+    }
+
+    public function getKardexHtml($kardex_data,$alumno){
+
+    	$current_date = Carbon::now()->format('d/m/Y');
+		$creditostotal = 0;
+		$creditoscubtotal = 0;
+		$materiastotal = 0;
+		$promediodec = 0.0;
+		$descuentotent = 0;
+		$descuento = '';
+		$descuentoporcentaje = 0;
+		$totalpromedio = 0;
+		foreach ($kardex_data as $_kardex_data) {
+			//obtener informacion de materia
+			$_materia_data = Materias::where('id_materia','=',$_kardex_data->materia)->orderBy('id_materia')->first();
+
+			if (isset($_materia_data['cred'])) {
+				$materia_cred = $_materia_data['cred'];
+			}else{
+				$materia_cred = 'NULL';
+			}
+			if (isset($_materia_data['nombre'])) {
+				$materia_nombre = $_materia_data['nombre'];
+			}else{
+				$materia_nombre = 'NULL';
+			}
+		
+			$cred 			= $materia_cred;
+			IF ($_kardex_data->periodo == '21-1'){
+				$creditostotal = $creditostotal + intval($cred);
+			}
+			IF (intval($_kardex_data->defin) < 70 ){
+				$descuentotent = $descuentotent + 1;
+			}
+			
+			$creditoscubtotal = $creditoscubtotal + intval($cred);
+			$promediodec = $promediodec + intval($_kardex_data->defin);
+			
+			
+			$materiastotal++;
+		}
+		
+		$totalpromedio = ($promediodec/$materiastotal);
+		
+		$descuentoporcentaje = number_format($totalpromedio, 2, '.', '');
+			IF ($descuentotent <= 0){
+				IF ($descuentoporcentaje >= 80 && $descuentoporcentaje < 90){
+					$descuento = '33%';
+				}
+				IF ($descuentoporcentaje >= 90 && $descuentoporcentaje < 95){
+					$descuento = '50%';
+				}
+				IF ($descuentoporcentaje >= 95 && $descuentoporcentaje <= 100){
+					$descuento = '100%';
+				}
+			}else{
+				$descuento = '0%';
+			}
+			
+    	//crear kardex html
+    	$html_kardex = '		
+		<!DOCTYPE html>
+		<html lang="en">
+		  <head>
+		    <meta charset="UTF-8" />
+		    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+		    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		    <title>Kardex</title>
+		  </head>
+		    <style>
+			* {
+		          margin: 0;
+		          padding: 0;
+		          font-family: sans-serif;
+		          text-transform: uppercase;
+		      }
+		        .container {
+		          /* width: 1195px; */
+		          padding: 0px 0px 0 30px;
+		        }
+
+		        .header {
+		          width: 100%;
+		        }
+
+		        img {
+		          object-fit: contain;
+		          width: 100%;
+		        }
+
+		        .title {
+		          font-size: x-large;
+		          text-align: center;
+		          letter-spacing: -1px;
+		        }
+
+		        .content2 {
+		          font-size: 0.4rem;
+				  position: relative;
+		        }
+
+		        .content2 img {
+				  position: absolute;
+		          top: 0;
+		          left: 0;
+		          right: 0;
+		          width: 100%;
+		          opacity: 0.2;
+		        }
+				footer {
+            position: fixed;
+            bottom: 0cm;
+            left: 0cm;
+            right: 0cm;
+            height: 3.3cm;
+            color: white;
+            text-align: center;
+        }
+		body {
+            margin: 2cm 0cm 0cm;
+        }
+		    </style>
+		    <div class="container">
+		      <div class="header">
+		        <img src="'.url('https://controlescolar.tesi.org.mx/storage/app/public/Images/Kardex/headerLogo.png').'" />
+		      </div>
+		      <div class="title">
+		        <div>
+		          DEPARTAMENTO DE CONTROL ESCOLAR | TECNOLÓGICO DE ESTUDIOS SUPERIORES
+		          DE IXTAPALUCA
+		        </div>
+		        <div>KARDEX</div>
+		      </div>
+			  <br>
+				<table style="width:100%; font-size: 0.8rem;">
+				<thead>
+				 <tr>
+				  <th style="width:20%" valign="middle" align="center"></th>
+				  <th style="width:30%" valign="middle" align="center"></th>
+				  <th style="width:20%" valign="middle" align="center"></th>
+				  <th style="width:30%" valign="middle" align="center"></th>
+				  <th style="width:20%" valign="middle" align="center"></th>
+				  <th style="width:30%" valign="middle" align="center"></th>
+				 </tr>
+				</thead>
+				<tbody>
+				  <tr>
+					<td style="text-align : justify;"><b>NOMBRE: </b></td><td style="text-align : justify;">'.$alumno->nombre_alumno.' '.$alumno->apellidop_alumno.' '.$alumno->apellidom_alumno.'</td>
+					<td style="text-align : justify;"></td><td style="text-align : justify;"></td>
+					<td style="text-align : justify;"><b>CARRERA:</b></td><td style="text-align : justify;">'.$alumno->carrera.'</td>
+				  </tr>
+				  <tr>
+					<td style="text-align : justify;"><b>CREDITOS:</b></td><td style="text-align : justify;">'.$creditostotal.'</td>
+					<td style="text-align : justify;"></td><td style="text-align : justify;"></td>
+				<td style="text-align : justify;"><b>CREDITOS CUBIERTOS:</b></td><td style="text-align : justify;">'.$creditoscubtotal.'</td>
+				  </tr>
+				  <tr>
+					<td style="text-align : justify;"><b>MATERIAS CURSADAS:</b></td><td style="text-align : justify;">'.$materiastotal.'</td>
+					<td style="text-align : justify;"></td><td style="text-align : justify;"></td>
+					<td style="text-align : justify;"><b>MATRICULA:</b></td><td style="text-align : justify;">'.$alumno->matricula.'</td>
+				  </tr>
+				  <tr>
+					<td style="text-align : justify;"><b>PROMEDIO:</b></td><td style="text-align : justify;">'.number_format($totalpromedio, 2, '.', '').'</td>
+					<td style="text-align : justify;"></td><td style="text-align : justify;"></td>
+					<td style="text-align : justify;"><b>FECHA:</b></td><td style="text-align : justify;">'.$current_date.'</td>
+				  </tr>
+				</tbody>
+				</table>
+				<br>
+			<main>
+			<body>
+		      <div class="content2">
+			  <img src="'.url('https://controlescolar.tesi.org.mx/storage/app/public/Images/Kardex/R.jpg').'" />
+		        <table>
+		          <thead>
+		            <tr>
+		              <th scope="col">CLAVE</th>
+		              <th scope="col">CRED</th>
+		              <th scope="col">NOMBRE ASIGNATURA</th>
+		              <th scope="col">Eval.ORD</th>
+		              <th scope="col">PERIODO</th>
+					  <th scope="col">2DA OP ORD</th>
+		              <th scope="col">PERIODO 2da O. ORD</th>
+		              <th scope="col">RECURSAMIENTO</th>
+		              <th scope="col">PERIODO RECURSAMIENTO</th>
+		              <th scope="col">2da OP REC</th>
+		              <th scope="col">PEIRODO 2da OP. REC</th>
+		              <th scope="col">Curso Especial</th>
+		              <th scope="col">Periodo CE</th>
+		              <th scope="col">2da OP. CE</th>
+		              <th scope="col">Periodo 2da OP CE</th>
+		              <th scope="col">EQUIVALENCIA</th>
+		              <th scope="col">PERIODO EQUIVALENCIA</th>
+		              <th scope="col">DEF.</th>
+		              <th scope="col">PERIODO DEF.</th>
+		            </tr>
+		          </thead>
+		          <tbody class="signaturesTable">
+		';
+		
+		foreach ($kardex_data as $_kardex_data) {
+			//obtener informacion de materia
+			$_materia_data = Materias::where('id_materia','=',$_kardex_data->materia)->orderBy('id_materia')->first();
+
+			if (isset($_materia_data['cred'])) {
+				$materia_cred = $_materia_data['cred'];
+			}else{
+				$materia_cred = 'NULL';
+			}
+			if (isset($_materia_data['nombre'])) {
+				$materia_nombre = $_materia_data['nombre'];
+			}else{
+				$materia_nombre = 'NULL';
+			}
+		
+			$clave 			= $_kardex_data->materia;
+			$cred 			= $materia_cred;
+			$nombre 		= $materia_nombre;
+			$ev_or 			= $_kardex_data->evaluacion_ordinaria;
+			$ev_or_per 		= $_kardex_data->periodo;
+			$SEGOP 			= $_kardex_data['2da_op_ord'];
+			$SEGOP_PER 		= $_kardex_data->periodo_2da_op_ord;
+			$REC 			= $_kardex_data->recursamiento;
+			$REC_PER 		= $_kardex_data->periodo_recursamiento;
+			$SEGOP_REC 		= $_kardex_data['2da_op_rec'];
+			$SEGOP_REC_PER	= $_kardex_data->periodo_2da_op_rec;
+			$CUR_ESP 		= $_kardex_data->curso_especial;
+			$CUR_ESP_PER 	= $_kardex_data->periodo_ce;
+			$SEGOP_CE 		= $_kardex_data['2da_op_ce'];
+			$SEGOP_CE_PER 	= $_kardex_data->periodo_2da_op_ce;
+			$EQUIVAL 		= $_kardex_data->equivalencia;
+			$EQUIVAL_PER 	= $_kardex_data->periodo_equivalencia;
+			$DEFIN 			= $_kardex_data->defin;
+			$DEFIN_PER 		= $_kardex_data->periodo_def;
+
+			$html_kardex .= '
+		            <!-- Mapear el tr -->
+		            <tr>
+		              <td>'.$clave.'</td>
+		              <td>'.$cred.'</td>
+		              <td>'.$nombre.'</td>
+		              <td>'.$ev_or.'</td>
+		              <td>'.$ev_or_per.'</td>
+		              <td>'.$SEGOP.'</td>
+		              <td>'.$SEGOP_PER.'</td>
+		              <td>'.$REC.'</td>
+		              <td>'.$REC_PER.'</td>
+		              <td>'.$SEGOP_REC.'</td>
+		              <td>'.$SEGOP_REC_PER.'</td>
+		              <td>'.$CUR_ESP.'</td>
+		              <td>'.$CUR_ESP_PER.'</td>
+		              <td>'.$SEGOP_CE.'</td>
+		              <td>'.$SEGOP_CE_PER.'</td>
+		              <td>'.$EQUIVAL.'</td>
+		              <td>'.$EQUIVAL_PER.'</td>
+		              <td>'.$DEFIN.'</td>
+					  <td>'.$DEFIN_PER.'</td> 
+		            </tr>
+			';
+		}
+
+		$html_kardex .= '
+		          </tbody>
+		        </table>
+		      </div>
+			 </main>
+			 <div>
+			 <br><br>
+			 	DESCUENTO POR PROMEDIO GENERAL: <b>'.$descuento.'</b>
+			 </div>
+			 <footer>
+            	<img src="'.url('https://controlescolar.tesi.org.mx/storage/app/public/Images/Kardex/footer.png').'"/>
+        	</footer>
+		   </body>
+		</html>
+		';
+
+		return $html_kardex;
+    }
+
+    public function getBoleta(Request $request)
+    {
+		//validar token
+		//validar que venga la matricula
+		if((isset($request['matricula'])) && (!empty($request['matricula'])) && ($request['matricula'] != '')){
+			//validar que la matricula exista
+			$alumno = Alumnos::where('matricula','=',$request['matricula'])->first();
+			if(empty($alumno)){
+				return response()->json($response = array('menssage' => 'Matricula no encontrada.','matricula' => $request['matricula']), 202);
+			}else{
+				//obtener informacion de kardex
+				$kardex_data = Kardex::where('matricula','=',$request['matricula'])->orderBy('materia')->get();
+				if (count($kardex_data)==0) {
+					return response()->json($response = array('menssage' => 'Matricula sin datos de boleta.','matricula' => $request['matricula']), 202);
+				}
+				$html_boleta = $this->getBoletaHtml($kardex_data,$alumno);
+				$options = new Options();
+				$options->set('isRemoteEnabled', true);
+				$dompdf = new Dompdf($options);
+				$dompdf->loadHtml($html_boleta);
+				// Render the HTML as PDF
+				$dompdf->render();
+
+				// Output the generated PDF to Browser
+				$file = $dompdf->output();
+				file_put_contents(public_path().'/pdf/boleta_'.$alumno->matricula.'.pdf', $file);
+				$pdf_enconded = chunk_split(base64_encode(file_get_contents(public_path().'/pdf/boleta_'.$alumno->matricula.'.pdf')));
+			}
+		}else{
+			return response()->json($response = array('menssage' => 'Matricula es un campo necesario.','matricula' => $request['matricula']), 202);
+		}
+		//convertir pdf a base 64
+		//$pdf_enconded = chunk_split(base64_encode(file_get_contents($this->pdfdoc)));
+		$response = array(
+			'menssage'	 	=> 'success matricula found',
+			'action' 		=> 'getBoleta',
+			'name'			=> $alumno->nombre_completo,
+			'matricula' 	=> $request['matricula'],
+			'data' 			=> json_encode($alumno),
+			'boletaURL'		=> url('/pdf/boleta_'.$alumno->matricula.'.pdf'),
+			'download'=> url('/boleta/download/'.$alumno->matricula),
+			//'boletaBase64'	=> $pdf_enconded,
+			'codigo' 		=> 200
+		);
+		return response()->json($response, 200);	
+    }
+
+    public function getBoletaHtml($kardex_data,$alumno){
+    	$current_date = Carbon::now()->format('d/m/Y');
+		$totalpromedio = 0;
+		$materiastotal = 0;
+		$promediodec = 0.0;
+		
+		
+		foreach ($kardex_data as $_kardex_data) {
+			if ($_kardex_data->periodo_def == '21-1') {
+				//obtener informacion de materia
+				$_materia_data = Materias::where('id_materia','=',$_kardex_data->materia)->orderBy('id_materia')->first();
+
+				if (isset($_materia_data['cred'])) {
+					$materia_cred = $_materia_data['cred'];
+				}else{
+					$materia_cred = 'NULL';
+				}
+				if (isset($_materia_data['nombre'])) {
+					$materia_nombre = $_materia_data['nombre'];
+				}else{
+					$materia_nombre = 'NULL';
+				}
+			
+				$clave 			= $_kardex_data->materia;
+				$cred 			= $materia_cred;
+				$nombre 		= $materia_nombre;
+				$ev_or_per 		= $_kardex_data->periodo;
+				IF ($_kardex_data->periodo_def == '21-1') {
+					$ev_or 			= $_kardex_data->evaluacion_ordinaria;
+					$SEGOP 			= $_kardex_data['2da_op_ord'];
+					$SEGOP_PER 		= $_kardex_data->periodo_2da_op_ord;
+					$REC 			= $_kardex_data->recursamiento;
+					$REC_PER 		= $_kardex_data->periodo_recursamiento;
+					$SEGOP_REC 		= $_kardex_data['2da_op_rec'];
+					$SEGOP_REC_PER	= $_kardex_data->periodo_2da_op_rec;
+					$CUR_ESP 		= $_kardex_data->curso_especial;
+					$CUR_ESP_PER 	= $_kardex_data->periodo_ce;
+					$SEGOP_CE 		= $_kardex_data['2da_op_ce'];
+					$SEGOP_CE_PER 	= $_kardex_data->periodo_2da_op_ce;
+					$EQUIVAL 		= $_kardex_data->equivalencia;
+					$EQUIVAL_PER 	= $_kardex_data->periodo_equivalencia;
+					$DEFIN 			= $_kardex_data->defin;
+					$DEFIN_PER 		= $_kardex_data->periodo_def;
+					
+					
+					$promediodec = $promediodec + intval($_kardex_data->defin);
+					$materiastotal++;
+				}
+				$totalpromedio = ($promediodec/$materiastotal);
+				
+			}
+		}
+		
+		
+    	$html_boleta = '
+    		<!DOCTYPE html>
+			<html lang="en">
+			  <head>
+			    <meta charset="UTF-8" />
+			    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+			    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+			    <title>Boleta</title>
+			  </head>
+			  <body>
+			    <style>
+			      * {
+			          margin: 0;
+			          padding: 0;
+			          font-family: sans-serif;
+			          text-transform: uppercase;
+			        }
+			        .container {
+			          /* width: 1195px; */
+			          /* min-height: 800px; */
+			          padding: 30px 40px 0 40px;
+			          overflow: hidden;
+			        }
+
+			        .header {
+			          width: 100%;
+			          display: flex;
+			        }
+
+			        img {
+			          object-fit: contain;
+			          width: 100%;
+			        }
+
+			        .card {
+			          border: 1px solid black;
+			          border-radius: 30px;
+			          position: relative;
+			          overflow: hidden;
+			        }
+
+			        #background-image {
+			          background-image: url("'.url('https://controlescolar.tesi.org.mx/storage/app/public/Images/Boleta/tesibg.png').'");
+			          width: 100%;
+			          top: 0;
+			          left: 0;
+			          height: 100%;
+			          opacity: 0.1;
+			          position: absolute;
+			          background-repeat: repeat-x;
+			          background-size: auto 17%;
+			          padding: 0;
+			          margin: 0;
+			          z-index: -1;
+			        }
+			        #background-image2 {
+			          background-image: url("'.url('https://controlescolar.tesi.org.mx/storage/app/public/Images/Boleta/tesibg.png').'");
+			          width: 100%;
+			          top: 24%;
+			          left: 4%;
+			          height: 100%;
+			          opacity: 0.1;
+			          position: absolute;
+			          background-repeat: repeat-x;
+			          background-size: auto 17%;
+			          padding: 0;
+			          margin: 0;
+			          z-index: -1;
+			        }
+			        #background-image3 {
+			          background-image: url("'.url('https://controlescolar.tesi.org.mx/storage/app/public/Images/Boleta/tesibg.png').'");
+			          width: 100%;
+			          top: 44%;
+			          left: 0;
+			          height: 100%;
+			          opacity: 0.1;
+			          position: absolute;
+			          background-repeat: repeat-x;
+			          background-size: auto 17%;
+			          padding: 0;
+			          margin: 0;
+			          z-index: -1;
+			        }
+			        #background-image4 {
+			          background-image: url("'.url('https://controlescolar.tesi.org.mx/storage/app/public/Images/Boleta/tesibg.png').'");
+			          width: 100%;
+			          top: 64%;
+			          left: 4%;
+			          height: 100%;
+			          opacity: 0.1;
+			          position: absolute;
+			          background-repeat: repeat-x;
+			          background-size: auto 17%;
+			          padding: 0;
+			          margin: 0;
+			          z-index: -1;
+			        }
+			        #background-image5 {
+			          background-image: url("'.url('https://controlescolar.tesi.org.mx/storage/app/public/Images/Boleta/tesibg.png').'");
+			          width: 100%;
+			          top: 84%;
+			          left: 0;
+			          height: 100%;
+			          opacity: 0.1;
+			          position: absolute;
+			          background-repeat: repeat-x;
+			          background-size: auto 17%;
+			          padding: 0;
+			          margin: 0;
+			          z-index: -1;
+			        }
+			        #background-image6 {
+			          background-image: url("'.url('https://controlescolar.tesi.org.mx/storage/app/public/Images/Boleta/tesibg.png').'");
+			          width: 100%;
+			          top: 104%;
+			          left: 4%;
+			          height: 100%;
+			          opacity: 0.1;
+			          position: absolute;
+			          background-repeat: repeat-x;
+			          background-size: auto 17%;
+			          padding: 0;
+			          margin: 0;
+			          z-index: -1;
+			        }
+
+			        .content1 {
+			          display: flex;
+			          justify-content: space-between;
+			          font-size: 0.8rem;
+			        }
+
+			        .content1 th,
+			        td {
+			          padding: 3px;
+			        }
+
+			        .content2 {
+			          font-size: 0.8rem;
+			          position: relative;
+			        }
+
+			        .content2 img {
+			          position: absolute;
+			          top: 0;
+			          left: 0;
+			          bottom: 0;
+			          right: 0;
+			          width: 100%;
+			          height: auto;
+			          opacity: 0.2;
+			        }
+
+			        .content2 table {
+			          width: 100%;
+			        }
+
+			        .content2 td {
+			          text-align: center;
+			        }
+
+			        .content2 thead th,
+			        td {
+			          padding: 2px;
+			        }
+
+			        .signaturesTable td {
+			          padding: 7px;
+			        }
+
+			        .tableContent td,
+			        th,
+			        table {
+			          border: 1px solid black;
+			          border-collapse: collapse;
+			        }
+
+			    </style>
+			    <div class="container">
+			      <div class="header">
+			        <div style="width: 25%">
+			          <img src="'.url('https://controlescolar.tesi.org.mx/storage/app/public/Images/Boleta/R.jpg').'" />
+			        </div>
+					</div>
+					<br><br>
+			        <div align="center"
+			          style="
+			            font-size: 1.4rem;
+			            font-weight: 600;
+			          "
+			        >
+					
+			          <div>Tecnológico de Estudios Superiores de Ixtapaluca</div>
+			          <div>Departamento de control escolar</div>
+			        
+			      </div>
+				  <br><br>
+			      <div class="card">
+			        <div id="background-image"></div>
+			        <div id="background-image2"></div>
+			        <div id="background-image3"></div>
+			        <div id="background-image4"></div>
+			        <div id="background-image5"></div>
+			        <div id="background-image6"></div>
+			        <div
+			          style="
+			            width: 100%;
+			            text-align: center;
+			            font-size: x-large;
+			            font-weight: 600;
+			          "
+			        >
+					
+			          BOLETA DE CALIFICACIONES
+			        </div>
+					<main>
+			        <table style="width: 100%">
+			            <tr>
+                            <td style="font-weight: 600"><b>- NOMBRE:</b></td><td>'.$alumno->nombre_alumno.'</td>
+                        </tr>
+			            <tr>
+                            <td style="font-weight: 600"><b>- No. DE MATRICULA:</b></td><td>'.$alumno->matricula.'</td>
+			            </tr>
+			            <tr>
+			              <td style="font-weight: 600"><b>- PERIODO:</b></td><td>21-1</td>
+			            </tr>
+			            <tr>
+			              <td style="font-weight: 600"><b>- FECHA:</b></td><td>'.$current_date.'</td>
+			            </tr>
+			            <tr>
+			              <td style="font-weight: 600"><b>- CARRERA:</b></td><td>'.$alumno->carrera.'</td>
+			            </tr>
+			            <tr>
+			              <td style="font-weight: 600"><b>- SEMESTRE:</b></td><td>'.$alumno->semestre.'</td>
+			            </tr>
+			            <tr>
+			              <td></td>
+			              <td></td>
+			            </tr>
+			            <tr>
+			              <td style="font-weight: 600"><b>- PROMEDIO:</b></td><td>'.number_format($totalpromedio, 2, '.', '').'</td>
+			            </tr>
+			          </table>
+			        </div>
+			        <div class="content2">
+			          <table class="tableContent">
+			            <thead style="background-color: #41b141">
+			              <tr>
+			                <th rowspan="2">CLAVE</th>
+			                <th rowspan="2">MATERIA</th>
+			                <th rowspan="2">CRED.</th>
+			                <th colspan="6">CALIFICACIÓN</th>
+			              </tr>
+			              <tr>
+			                <th>ORD.</th>
+			                <th>2da.ORD</th>
+			                <th>REC.</th>
+			                <th>2da.REC</th>
+			                <th>ESPEC</th>
+							<th>2da.ESPEC</th>
+			              </tr>
+			            </thead>
+			            <tbody class="signaturesTable">
+		';
+
+		foreach ($kardex_data as $_kardex_data) {
+			if ($_kardex_data->periodo_def == '21-1') {
+				//obtener informacion de materia
+				$_materia_data = Materias::where('id_materia','=',$_kardex_data->materia)->orderBy('id_materia')->first();
+
+				if (isset($_materia_data['cred'])) {
+					$materia_cred = $_materia_data['cred'];
+				}else{
+					$materia_cred = 'NULL';
+				}
+				if (isset($_materia_data['nombre'])) {
+					$materia_nombre = $_materia_data['nombre'];
+				}else{
+					$materia_nombre = 'NULL';
+				}
+			
+				
+				
+				
+				IF ($_kardex_data->periodo_def == '21-1') {
+					$ev_or_per 		= $_kardex_data->periodo;
+					$clave 			= $_kardex_data->materia;
+					$cred 			= $materia_cred;
+					$nombre 		= $materia_nombre;
+					$ev_or 			= $_kardex_data->evaluacion_ordinaria;
+					$SEGOP 			= $_kardex_data['2da_op_ord'];
+					$SEGOP_PER 		= $_kardex_data->periodo_2da_op_ord;
+					$REC 			= $_kardex_data->recursamiento;
+					$REC_PER 		= $_kardex_data->periodo_recursamiento;
+					$SEGOP_REC 		= $_kardex_data['2da_op_rec'];
+					$SEGOP_REC_PER	= $_kardex_data->periodo_2da_op_rec;
+					$CUR_ESP 		= $_kardex_data->curso_especial;
+					$CUR_ESP_PER 	= $_kardex_data->periodo_ce;
+					$SEGOP_CE 		= $_kardex_data['2da_op_ce'];
+					$SEGOP_CE_PER 	= $_kardex_data->periodo_2da_op_ce;
+					$EQUIVAL 		= $_kardex_data->equivalencia;
+					$EQUIVAL_PER 	= $_kardex_data->periodo_equivalencia;
+					$DEFIN 			= $_kardex_data->defin;
+					$DEFIN_PER 		= $_kardex_data->periodo_def;
+				}
+
+				$html_boleta .= '
+				              <tr>
+				                <td>'.$clave.'</td>
+				                <td>'.$nombre.'</td>
+				                <td>'.$cred.'</td>
+				                <td>'.$ev_or.'</td>
+				                <td>'.$SEGOP.'</td>
+				                <td>'.$REC.'</td>
+				                <td>'.$SEGOP_REC.'</td>
+				                <td>'.$CUR_ESP.'</td>
+								<td>'.$SEGOP_CE.'</td>
+				              </tr>
+				';
+			}
+		}
+
+
+
+		
+		$html_boleta .= '
+			            </tbody>
+			          </table>
+			        </div>
+			      </div>
+			    </div></main>
+			  </body>
+			</html>
+    	';
+
+
+
+    	return $html_boleta;
+    }
+
+    public function downloadKardex($matricula)
+    {
+    	$kardex = public_path().'/pdf/kardex_'.$matricula.'.pdf';
+    	if(isset($matricula) && ($matricula!='') && (file_exists($kardex))){
+        	return response()->download($kardex);
+    	}else{
+    		return redirect('/');
+    	}
+    }
+
+    public function downloadBoleta($matricula)
+    {
+    	$boleta = public_path().'/pdf/boleta_'.$matricula.'.pdf';
+    	if(isset($matricula) && ($matricula!='') && (file_exists($boleta))){
+        	return response()->download($boleta);
+    	}else{
+    		return redirect('/');
+    	}
+    }
+
+    public function loginRequired(){
+    	$response = array(
+			'menssage'	 	=> 'login es requerido',
+			'codigo' 		=> 400
+		);
+		return response()->json($response, 400);
+    }
+
+    public function getCalificacion(Request $request){
+    	if((isset($request['id_alumno'])) && (!empty($request['id_alumno'])) 
+            && (isset($request['matricula'])) && (!empty($request['matricula']))
+        ){
+
+    		$calificaciones = CalificacionesTmp::where('alumnoMatricula','=',$request['matricula'])->get();
+    		if ((!empty($calificaciones)) && (count($calificaciones)>0)) {
+
+    			foreach ($calificaciones as $_calificacion) {
+    				$id_maestro = $_calificacion['id_maestro'];
+    				$maestro = Maestros::where('id','=',$id_maestro)->first();
+    				
+    				if (!empty($maestro)) {
+    					$name_maestro= $maestro['name'].' '.$maestro['lastname'];
+    					$_calificacion['maestro_name'] = $name_maestro;
+    				}else{
+    					$name_maestro = 'Maestro no encontrado';
+    					$_calificacion['maestro_name'] = $name_maestro;
+    				}
+    			}
+    			$response = array(
+	                'menssage'      	=> 'success',
+	                'action'        	=> 'getCalificacion',
+	                'calificaciones'	=> $calificaciones,
+	                'codigo'        	=> 200
+	            );
+	            return response()->json($response, 200);
+    		}else{
+    			$response = array(
+	                'menssage'      => 'No se encontraron calificaciones para este alumno.',
+	                'action'        => 'getCalificacion',
+	                'codigo'        => 200
+	            );
+	            return response()->json($response, 200);
+    		}
+        }else{
+            $response = array(
+                'menssage'      => 'La petición es sintácticamente incorrecta.',
+                'action'        => 'getMaterias',
+                'codigo'        => 400
+            );
+            return response()->json($response, 400);
+        }
+    }
+
+}//cierre de clase principal

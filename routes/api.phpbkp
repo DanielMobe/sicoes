@@ -1,0 +1,59 @@
+<?php
+
+use Illuminate\Http\Request;
+
+/*
+|--------------------------------------------------------------------------
+| API Routes
+|--------------------------------------------------------------------------
+|
+| Here is where you can register API routes for your application. These
+| routes are loaded by the RouteServiceProvider within a group which
+| is assigned the "api" middleware group. Enjoy building your API!
+|
+*/
+
+Route::middleware('auth:api')->get('/user', function (Request $request) {
+    return $request->user();
+});
+
+Route::middleware('auth:maestros:api')->get('/maestros', function (Request $request) {
+    return $request->user();
+});
+
+//rutas de alumnos
+Route::group(['middleware' => ['alumnos_auth']], function () {
+    Route::get('alumnos',             'alumnosController@index');
+    Route::get('alumnos/{alumno}',    'alumnosController@show');
+    Route::post('alumnos',            'alumnosController@store');
+    Route::put('alumnos/{alumno}',    'alumnosController@update');
+    Route::delete('alumnos/{alumno}', 'alumnosController@delete');
+    //rutas para kardex y boleta
+    Route::post('alumnos/kardex',     'alumnosController@getKardex');
+    Route::post('alumnos/boleta',     'alumnosController@getBoleta');
+});
+
+//rutas de maestros
+Route::group(['middleware' => ['maestros_auth']], function () {
+    Route::post('maestro/getGrupos',                        'maestrosController@getGrupos');
+    Route::post('maestro/getMaterias',                      'maestrosController@getMaterias');
+    Route::post('maestro/getAlumnosByGrupo',                'maestrosController@getAlumnosByGrupo');
+    Route::post('maestro/getAlumnosByGrupoAndMateria',      'maestrosController@getAlumnosByGrupoAndMateria');
+    Route::post('maestro/setCalificacion',                  'maestrosController@setCalificacion');
+    Route::post('maestro/getCalificacion',                  'maestrosController@getCalificacion');
+    Route::post('maestro/updateCalificacion',               'maestrosController@updateCalificacion');
+    Route::post('maestro/deleteCalificacion',               'maestrosController@deleteCalificacion');
+});
+
+//login auth alumnos
+Route::post('register', 'Auth\RegisterController@register');
+Route::post('login',    'Auth\LoginController@login');
+Route::post('logout',   'Auth\LoginController@logout');
+
+//login auth maestros
+Route::post('maestro/register', 'Auth\RegisterController@registerMaestro');
+Route::post('maestro/login',    'Auth\LoginController@loginMaestro');
+Route::post('maestro/logout',   'Auth\LoginController@logoutMaestro');
+
+//login required
+Route::get('login/required', 'alumnosController@loginRequired');
